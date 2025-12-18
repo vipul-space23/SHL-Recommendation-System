@@ -1,6 +1,6 @@
 """
 FastAPI Backend for SHL Recommendation System
-Provides /health and /recommend endpoints
+Provides /health, /recommend endpoints and serves the Frontend
 """
 
 from dotenv import load_dotenv
@@ -11,6 +11,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn
@@ -84,24 +85,30 @@ async def startup_event():
         
         # Check if API key was loaded
         if not engine.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY not found in .env file")
+            # Fallback check for Render/Docker env vars
+            if "GEMINI_API_KEY" in os.environ:
+                 engine.gemini_api_key = os.environ["GEMINI_API_KEY"]
+            else:
+                 print("⚠️ WARNING: GEMINI_API_KEY not found in .env. Checking system env...")
         
         # Load pre-computed embeddings
-        engine.load_embeddings('shl_embeddings.npy')
-        
-        print("✅ Recommendation engine initialized successfully!")
+        if os.path.exists('shl_embeddings.npy'):
+            engine.load_embeddings('shl_embeddings.npy')
+            print("✅ Recommendation engine initialized successfully!")
+        else:
+            print("⚠️ Embeddings file not found. API will fail unless built.")
         
     except Exception as e:
         print(f"❌ Error initializing engine: {e}")
-        raise
+        # We don't raise here to allow the app to start (and show logs) even if engine fails
 
-@app.get("/", response_model=HealthResponse)
+# --- MODIFIED ROOT ENDPOINT TO SERVE FRONTEND ---
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    """Root endpoint"""
-    return {
-        "status": "success",
-        "message": "SHL Assessment Recommendation API is running"
-    }
+    """Serve the index.html frontend"""
+    if os.path.exists("index.html"):
+        return FileResponse("index.html")
+    return HTMLResponse(content="<h1>Frontend not found</h1><p>Please ensure index.html is in the root directory.</p>", status_code=404)
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -115,13 +122,6 @@ async def health_check():
 async def recommend_assessments(request: RecommendRequest):
     """
     Recommend assessments based on query
-    
-    Args:
-        query: Natural language query or job description
-        top_k: Number of recommendations (5-10)
-    
-    Returns:
-        List of recommended assessments
     """
     global engine
     
@@ -157,6 +157,7 @@ async def recommend_assessments(request: RecommendRequest):
         )
         
     except Exception as e:
+        print(f"Error generating recommendations: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating recommendations: {str(e)}")
 
 @app.get("/stats")
